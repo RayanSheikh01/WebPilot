@@ -18,7 +18,8 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py::test_per_domain_throttle -v -s)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py --collect-only)",
       "Bash(.venv/Scripts/python.exe -m pip install \"pytest<9\")",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_tools.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_tools.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_planner_loop.py -v)"
     ]
   }
 }
