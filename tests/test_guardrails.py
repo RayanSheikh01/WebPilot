@@ -1,43 +1,56 @@
-import pytest
 import time
 
+from webpilot.agent.guardrails import BudgetTracker, BudgetViolation
 
-@pytest.mark.asyncio
-async def test_budget_tracker():
-    from webpilot.agent.guardrails import BudgetTracker, BudgetExceeded
 
-    budget = {
-        "wall_clock": 1,  # 1 second
-        "tool_calls": 2,
-        "pages": 1,
-        "tokens": 10,
-    }
-    tracker = BudgetTracker(budget)
+def test_ok_when_within_limits():
+    t = BudgetTracker(max_seconds=60, max_tool_calls=10, max_pages=10)
+    assert t.check_before_call() is None
 
-    # Should allow first call
-    tracker.check_before_call("browser_goto", {"url": "http://example.com"})
-    tracker.record_call("browser_goto", {"url": "http://example.com"}, {}, 5)
 
-    # Should not allow second call to browser_goto (page limit)
-    with pytest.raises(BudgetExceeded, match="Page limit exceeded"):
-        tracker.check_before_call("browser_goto", {"url": "http://example.org"})
+def test_cancellation_takes_precedence():
+    t = BudgetTracker()
+    t.cancel()
+    v = t.check_before_call()
+    assert isinstance(v, BudgetViolation)
+    assert v.name == "cancelled"
 
-    # Should allow a different tool call
-    tracker.check_before_call("web_search", {"query": "test"})
-    tracker.record_call("web_search", {"query": "test"}, {}, 5)
 
-    # Should not allow any more tool calls (tool call limit)
-    with pytest.raises(BudgetExceeded, match="Tool call limit exceeded"):
-        tracker.check_before_call("web_search", {"query": "another test"})
+def test_tool_calls_limit():
+    t = BudgetTracker(max_tool_calls=2)
+    t.record_tool_call()
+    t.record_tool_call()
+    v = t.check_before_call()
+    assert v and v.name == "tool_calls"
 
-    # Should not allow calls after wall clock time exceeded
-    time.sleep(1.1)
-    with pytest.raises(BudgetExceeded, match="Wall clock time exceeded"):
-        tracker.check_before_call("web_search", {"query": "late test"})
 
-    # Test cancellation
-    tracker = BudgetTracker(budget)
-    tracker.cancel()
-    with pytest.raises(BudgetExceeded, match="Budget has been cancelled"):
-        tracker.check_before_call("web_search", {"query": "cancelled test"})
+def test_pages_limit_uses_unique_urls():
+    t = BudgetTracker(max_pages=2)
+    t.record_page("https://a.com/x")
+    t.record_page("https://a.com/x")  # duplicate
+    assert t.check_before_call() is None
+    t.record_page("https://b.com/y")
+    v = t.check_before_call()
+    assert v and v.name == "pages"
 
+
+def test_token_limit_input():
+    t = BudgetTracker(max_input_tokens=100)
+    t.record_usage(60, 0)
+    t.record_usage(50, 0)
+    v = t.check_before_call()
+    assert v and v.name == "tokens"
+
+
+def test_token_limit_output():
+    t = BudgetTracker(max_output_tokens=50)
+    t.record_usage(0, 60)
+    v = t.check_before_call()
+    assert v and v.name == "tokens"
+
+
+def test_wall_clock():
+    t = BudgetTracker(max_seconds=0.05)
+    time.sleep(0.06)
+    v = t.check_before_call()
+    assert v and v.name == "wall_clock"

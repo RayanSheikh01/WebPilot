@@ -19,7 +19,9 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py --collect-only)",
       "Bash(.venv/Scripts/python.exe -m pip install \"pytest<9\")",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_tools.py -v)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_planner_loop.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_planner_loop.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_guardrails.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest -q)"
     ]
   }
 }

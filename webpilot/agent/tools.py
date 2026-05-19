@@ -1,195 +1,214 @@
-from typing import List, Dict
+"""Tool schemas (per plan §2.1) and ToolExecutor (per plan §2.3).
 
-TOOL_SCHEMAS: List[Dict] = [
+Schemas use the field names the system prompt assumes:
+  note(text), cite(url, title, claim), finish(summary).
+"""
+
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from .guardrails import BudgetTracker
+
+DEFAULT_MAX_CHARS = 8000
+HARD_MAX_CHARS = 32000
+
+TOOL_SCHEMAS: list[dict] = [
     {
         "name": "web_search",
-        "description": "Search the web for recent information. Use this tool when you need to find up-to-date information, or if you need to find information that might not be on the page you have open. Input should be a JSON object with a 'query' field containing the search query, and an optional 'k' field for the number of results (default 3).",
+        "description": "Search the web. Use specific queries; prefer multiple narrow searches over one broad one.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string"
-                },
-                "k": {
-                    "type": "integer",
-                    "default": 3
-                }
+                "query": {"type": "string"},
+                "k": {"type": "integer", "default": 5, "description": "Number of results (default 5)."},
             },
-            "required": ["query"]
+            "required": ["query"],
         },
     },
     {
         "name": "browser_goto",
-        "description": "Navigate the browser to a URL. Use this tool to load a web page. Input should be a JSON object with a 'url' field containing the URL to navigate to.",
+        "description": "Navigate to an absolute http(s) URL from a prior search or get_links result. Returns final_url, title, status, snippet.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string"
-                }
-            },
-            "required": ["url"]
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
         },
     },
     {
         "name": "browser_get_text",
-        "description": "Extract text content from the current page. Use this tool to read the text of the page. Input should be a JSON object with an optional 'max_chars' field to limit the number of characters returned (default 1000).",
+        "description": "Read text from the current page. Truncates to max_chars (default 8000, hard cap 32000).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "max_chars": {
-                    "type": "integer",
-                    "default": 1000
-                }
+                "selector": {"type": "string", "default": "body"},
+                "max_chars": {"type": "integer", "default": DEFAULT_MAX_CHARS},
             },
-            "required": []
+            "required": [],
         },
     },
     {
         "name": "browser_get_links",
-        "description": "Extract links from the current page. Use this tool to find links on the page. Input should be an empty JSON object ({}). Output will be a list of dicts with 'text' and 'href' fields.",
+        "description": "Get http(s) links from the current page as a list of {text, href}.",
         "input_schema": {
             "type": "object",
-            "properties": {},
-            "required": []
+            "properties": {"selector": {"type": "string", "default": "body"}},
+            "required": [],
         },
     },
     {
         "name": "browser_screenshot",
-        "description": "Take a screenshot of the current page. Use this tool to capture the visual appearance of the page. Input should be an empty JSON object ({}). Output will be a base64-encoded PNG image.",
+        "description": "Take a screenshot of the current page. Use sparingly; counts against the budget.",
         "input_schema": {
             "type": "object",
-            "properties": {},
-            "required": []
+            "properties": {"full_page": {"type": "boolean", "default": False}},
+            "required": [],
         },
     },
     {
         "name": "browser_back",
-        "description": "Go back in browser history. Use this tool to return to the previous page. Input should be an empty JSON object ({}).",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        },
+        "description": "Return to the previous page.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "note",
-        "description": "Record a note for later reference. Use this tool to save information you might want to recall later. Input should be a JSON object with a 'content' field containing the note text.",
+        "description": "Append to private working memory. Notes do not appear in the final report.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string"
-                }
-            },
-            "required": ["content"]
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
         },
     },
     {
         "name": "cite",
-        "description": "Add a citation for a piece of information. Use this tool to keep track of sources for information you find. Input should be a JSON object with 'text' and 'url' fields.",
+        "description": "Record a claim with its source URL and the page title you read it on. Every substantive report statement must be backed by a cite.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "text": {
-                    "type": "string"
-                },
-                "url": {
-                    "type": "string"
-                }
+                "url": {"type": "string"},
+                "title": {"type": "string"},
+                "claim": {"type": "string"},
             },
-            "required": ["text", "url"]
+            "required": ["url", "title", "claim"],
         },
     },
     {
         "name": "finish",
-        "description": "Finish the task and return the final answer. Use this tool when you have completed all necessary steps and are ready to provide the final answer. Input should be a JSON object with an 'answer' field containing the final answer.",
+        "description": "End the run. Provide a short summary of what you found.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "answer": {
-                    "type": "string"
-                }
-            },
-            "required": ["answer"]
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
         },
     },
 ]
 
 
 class ToolExecutor:
-    def __init__(self, browser, search, tracker, emit, screenshot_dir, notes_sink):
+    """Dispatches tool calls; gates each on the budget tracker."""
+
+    def __init__(
+        self,
+        browser,
+        search,
+        tracker: BudgetTracker,
+        screenshot_dir: Path,
+        emit: Callable[[str, dict], Awaitable[None] | None] | None = None,
+    ):
         self.browser = browser
         self.search = search
         self.tracker = tracker
+        self.screenshot_dir = Path(screenshot_dir)
         self.emit = emit
-        self.screenshot_dir = screenshot_dir
-        self.notes_sink = notes_sink
-        self.tool_map = {
-            "web_search": self._run_web_search,
-            "browser_goto": self._run_browser_goto,
-            "browser_get_text": self._run_browser_get_text,
-            "browser_get_links": self._run_browser_get_links,
-            "browser_screenshot": self._run_browser_screenshot,
-            "browser_back": self._run_browser_back,
-            "note": self._run_note,
-            "cite": self._run_cite,
-            "finish": self._run_finish,
+        self.notes: list[str] = []
+        self.sources: list[dict] = []
+        self.finished: bool = False
+        self.finish_summary: str | None = None
+        self._screenshot_count = 0
+        self._dispatch: dict[str, Callable[[dict], Awaitable[Any]]] = {
+            "web_search": self._web_search,
+            "browser_goto": self._browser_goto,
+            "browser_get_text": self._browser_get_text,
+            "browser_get_links": self._browser_get_links,
+            "browser_screenshot": self._browser_screenshot,
+            "browser_back": self._browser_back,
+            "note": self._note,
+            "cite": self._cite,
+            "finish": self._finish,
         }
 
-    async def run(self, name: str, input: Dict) -> Dict:
-        if name not in self.tool_map:
-            raise ValueError(f"Unknown tool: {name}")
-        await self.tracker.check_before_call(name, input)
-        result = await self.tool_map[name](input)
-        tokens_used = 0  # In a real implementation, calculate tokens used based on input and output size.
-        await self.tracker.record_call(name, input, result, tokens_used)
-        return result
+    async def run(self, name: str, tool_input: dict) -> Any:
+        violation = self.tracker.check_before_call()
+        if violation is not None:
+            return {"error": f"budget_exceeded:{violation.name}"}
 
-    # Placeholder implementations for each tool. In a real implementation, these would interact with the browser and search components.
+        handler = self._dispatch.get(name)
+        if handler is None:
+            return {"error": f"unknown_tool:{name}"}
 
-    async def _run_web_search(self, input):
-        query = input["query"]
-        k = input.get("k", 3)
-        return {"results": [f"Result {i+1} for {query}" for i in range(k)]}
+        self.tracker.record_tool_call()
+        try:
+            return await handler(tool_input or {})
+        except Exception as e:  # tool failures returned to planner, never raised
+            return {"error": f"tool_failed:{type(e).__name__}:{e}"}
 
-    async def _run_browser_goto(self, input):
-        url = input["url"]
-        # Simulate browser navigation
-        return {"status": f"Navigated to {url}"}
+    async def _web_search(self, args: dict) -> dict:
+        query = args["query"]
+        k = int(args.get("k", 5))
+        hits = await self.search.search(query, k=k)
+        return {
+            "results": [
+                {"title": h.title, "url": h.url, "snippet": h.snippet} for h in hits
+            ]
+        }
 
-    async def _run_browser_get_text(self, input):
-        max_chars = input.get("max_chars", 1000)
-        # Simulate getting text from the page
-        return {"text": "Some page text"[:max_chars]}
+    async def _browser_goto(self, args: dict) -> dict:
+        url = args["url"]
+        nav = await self.browser.goto(url)
+        self.tracker.record_page(nav.final_url)
+        return {
+            "final_url": nav.final_url,
+            "title": nav.title,
+            "status": nav.status,
+            "snippet": nav.snippet[:DEFAULT_MAX_CHARS],
+        }
 
-    async def _run_browser_get_links(self, input):
-        # Simulate extracting links from the page
-        return {"links": [{"text": "Example", "href": "http://example.com"}]}
+    async def _browser_get_text(self, args: dict) -> dict:
+        selector = args.get("selector", "body")
+        max_chars = min(int(args.get("max_chars", DEFAULT_MAX_CHARS)), HARD_MAX_CHARS)
+        text = await self.browser.get_text(selector=selector, max_chars=max_chars)
+        return {"text": text}
 
-    async def _run_browser_screenshot(self, input):
-        # Simulate taking a screenshot
-        return {"screenshot": "base64-encoded-image"}
-    
-    async def _run_browser_back(self, input):
-        # Simulate going back in browser history
-        return {"status": "Went back in history"}
-    
-    async def _run_note(self, input):
-        content = input["content"]
-        # Simulate saving a note
-        self.notes_sink.save(content)
-        return {"status": "Note saved"}
-    
-    async def _run_cite(self, input):
-        text = input["text"]
-        url = input["url"]
-        # Simulate saving a citation
-        self.notes_sink.save(f"Citation: {text} ({url})")
-        return {"status": "Citation saved"}
-    
-    async def _run_finish(self, input):
-        answer = input["answer"]
-        # Simulate finishing the task
-        return {"status": "Task finished", "answer": answer}
-    
+    async def _browser_get_links(self, args: dict) -> dict:
+        selector = args.get("selector", "body")
+        links = await self.browser.get_links(selector=selector)
+        return {"links": links}
+
+    async def _browser_screenshot(self, args: dict) -> dict:
+        self._screenshot_count += 1
+        path = self.screenshot_dir / f"{self._screenshot_count}.png"
+        await self.browser.screenshot(path, full_page=bool(args.get("full_page", False)))
+        return {"path": str(path)}
+
+    async def _browser_back(self, args: dict) -> dict:
+        nav = await self.browser.back()
+        return {
+            "final_url": nav.final_url,
+            "title": nav.title,
+            "status": nav.status,
+            "snippet": nav.snippet[:DEFAULT_MAX_CHARS],
+        }
+
+    async def _note(self, args: dict) -> dict:
+        self.notes.append(args["text"])
+        return {"ok": True}
+
+    async def _cite(self, args: dict) -> dict:
+        self.sources.append(
+            {"url": args["url"], "title": args["title"], "claim": args["claim"]}
+        )
+        return {"ok": True}
+
+    async def _finish(self, args: dict) -> dict:
+        self.finished = True
+        self.finish_summary = args.get("summary", "")
+        return {"finished": True, "summary": self.finish_summary}
