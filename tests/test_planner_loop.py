@@ -143,6 +143,37 @@ async def test_cache_markers_present_in_request():
     assert req["tools"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
+async def test_planner_emits_events_in_order():
+    fake = FakeAnthropic(
+        [
+            _Response(
+                content=[_tool_use("web_search", {"query": "x"}, "u1")],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                content=[_tool_use("finish", {"summary": "ok"}, "u2")],
+                usage=_Usage(5, 5),
+            ),
+        ]
+    )
+    executor = FakeExecutor(results_by_name={"web_search": {"results": []}})
+    events: list[tuple[str, dict]] = []
+
+    def emit(kind, payload):
+        events.append((kind, payload))
+
+    planner = Planner(fake, executor, BudgetTracker(), model="m", emit=emit)
+    await planner.run("brief")
+
+    kinds = [k for k, _ in events]
+    assert kinds[0] == "status:running"
+    assert "tool_call" in kinds
+    assert "tool_result" in kinds
+    assert "finish" in kinds
+    assert kinds.index("tool_call") < kinds.index("tool_result")
+    assert kinds[-1] == "finish"
+
+
 async def test_budget_violation_breaks_loop_before_call():
     fake = FakeAnthropic([])
     executor = FakeExecutor(results_by_name={})

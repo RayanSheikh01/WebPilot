@@ -187,6 +187,11 @@ class ToolExecutor:
         self._screenshot_count += 1
         path = self.screenshot_dir / f"{self._screenshot_count}.png"
         await self.browser.screenshot(path, full_page=bool(args.get("full_page", False)))
+        if self.emit is not None:
+            try:
+                self.emit("screenshot", {"path": str(path)})
+            except Exception:
+                pass
         return {"path": str(path)}
 
     async def _browser_back(self, args: dict) -> dict:

@@ -1,59 +1,160 @@
+import asyncio
+from datetime import datetime
+
 import pytest
 
-@pytest.mark.asyncio
-async def test_event_creation():
-    from webpilot.events import event_bus
-    events_received = []
+from webpilot.events import Event, EventBus
 
-    async def test_listener(data):
-        events_received.append(data)
 
-    await event_bus.subscribe("test_event", test_listener)
-    await event_bus.publish("test_event", {"key": "value"})
+def _make_event(kind: str = "test", payload: dict | None = None) -> Event:
+    return Event(kind=kind, payload=payload or {}, ts=datetime.utcnow())
 
-    assert len(events_received) == 1
-    assert events_received[0] == {"key": "value"}
 
-@pytest.mark.asyncio
-async def test_multiple_listeners():
-    from webpilot.events import event_bus
-    events_received_1 = []
-    events_received_2 = []
+async def test_publish_no_subscribers_does_not_block_or_raise():
+    bus = EventBus()
+    # Should be a no-op; no subscribers registered.
+    bus.publish("brief-1", _make_event())
+    # Internal state should not have created an entry for brief-1.
+    assert bus._queues.get("brief-1", []) == []
 
-    async def listener_one(data):
-        events_received_1.append(data)
 
-    async def listener_two(data):
-        events_received_2.append(data)
+async def test_subscribe_yields_events_published_after_subscribe():
+    bus = EventBus()
+    received: list[Event] = []
+    ready = asyncio.Event()
 
-    await event_bus.subscribe("multi_event", listener_one)
-    await event_bus.subscribe("multi_event", listener_two)
-    await event_bus.publish("multi_event", {"multi": "data"})
+    async def consumer():
+        ready.set()
+        async for evt in bus.subscribe("brief-1"):
+            received.append(evt)
+            if len(received) >= 2:
+                break
 
-    assert len(events_received_1) == 1
-    assert len(events_received_2) == 1
-    assert events_received_1[0] == {"multi": "data"}
-    assert events_received_2[0] == {"multi": "data"}
+    task = asyncio.create_task(consumer())
+    await ready.wait()
+    # Give the subscriber a chance to register its queue.
+    await asyncio.sleep(0.01)
 
-@pytest.mark.asyncio
-async def test_no_listeners():
-    from webpilot.events import event_bus
-    # This should not raise an error even if there are no listeners
-    await event_bus.publish("no_listener_event", {"data": "test"})
+    e1 = _make_event("a", {"i": 1})
+    e2 = _make_event("b", {"i": 2})
+    bus.publish("brief-1", e1)
+    bus.publish("brief-1", e2)
 
-@pytest.mark.asyncio
-async def test_listener_order():
-    from webpilot.events import event_bus
-    events_received = []
+    await asyncio.wait_for(task, timeout=1.0)
+    assert received == [e1, e2]
 
-    async def first_listener(data):
-        events_received.append("first")
 
-    async def second_listener(data):
-        events_received.append("second")
+async def test_multiple_subscribers_each_get_their_own_copy():
+    bus = EventBus()
+    received_a: list[Event] = []
+    received_b: list[Event] = []
+    ready = asyncio.Event()
+    started = 0
+    lock = asyncio.Lock()
 
-    await event_bus.subscribe("order_event", first_listener)
-    await event_bus.subscribe("order_event", second_listener)
-    await event_bus.publish("order_event", {"order": "test"})
+    async def consumer(out: list[Event]):
+        nonlocal started
+        async for evt in bus.subscribe("brief-1"):
+            async with lock:
+                pass
+            out.append(evt)
+            break
 
-    assert events_received == ["first", "second"]
+    async def starter(out):
+        nonlocal started
+        async for evt in bus.subscribe("brief-1"):
+            out.append(evt)
+            break
+
+    # Use a helper that signals when its queue is registered.
+    async def consumer_signaled(out: list[Event], signal: asyncio.Event):
+        agen = bus.subscribe("brief-1")
+        # advance once to register the queue; we use anext on first iter
+        signal.set()
+        async for evt in agen:
+            out.append(evt)
+            break
+
+    s1 = asyncio.Event()
+    s2 = asyncio.Event()
+    t1 = asyncio.create_task(consumer_signaled(received_a, s1))
+    t2 = asyncio.create_task(consumer_signaled(received_b, s2))
+    await s1.wait()
+    await s2.wait()
+    await asyncio.sleep(0.01)  # let both reach the queue.get
+
+    evt = _make_event("fanout", {"x": 1})
+    bus.publish("brief-1", evt)
+
+    await asyncio.wait_for(asyncio.gather(t1, t2), timeout=1.0)
+    assert received_a == [evt]
+    assert received_b == [evt]
+
+
+async def test_queue_removed_after_subscriber_exits():
+    bus = EventBus()
+
+    agen = bus.subscribe("brief-1")
+    # Prime the generator so it registers its queue.
+    fetch_task = asyncio.create_task(agen.__anext__())
+    await asyncio.sleep(0.01)
+    assert len(bus._queues.get("brief-1", [])) == 1
+
+    bus.publish("brief-1", _make_event())
+    await fetch_task  # consume the single event
+
+    # Closing the async generator runs its finally block (queue cleanup).
+    await agen.aclose()
+
+    assert bus._queues.get("brief-1", []) == []
+
+
+async def test_close_causes_all_subscribers_to_exit():
+    bus = EventBus()
+    received_a: list[Event] = []
+    received_b: list[Event] = []
+
+    async def consumer(out: list[Event]):
+        async for evt in bus.subscribe("brief-1"):
+            out.append(evt)
+
+    t1 = asyncio.create_task(consumer(received_a))
+    t2 = asyncio.create_task(consumer(received_b))
+    await asyncio.sleep(0.01)
+
+    e1 = _make_event("hello")
+    bus.publish("brief-1", e1)
+    await asyncio.sleep(0.01)
+
+    bus.close("brief-1")
+
+    await asyncio.wait_for(asyncio.gather(t1, t2), timeout=1.0)
+    assert received_a == [e1]
+    assert received_b == [e1]
+    # And queues are cleaned up after subscribers exit.
+    assert bus._queues.get("brief-1", []) == []
+
+
+async def test_brief_id_isolation():
+    bus = EventBus()
+    received_a: list[Event] = []
+    received_b: list[Event] = []
+
+    async def consumer(brief_id: str, out: list[Event]):
+        async for evt in bus.subscribe(brief_id):
+            out.append(evt)
+
+    ta = asyncio.create_task(consumer("A", received_a))
+    tb = asyncio.create_task(consumer("B", received_b))
+    await asyncio.sleep(0.01)
+
+    evt_a = _make_event("for-a")
+    bus.publish("A", evt_a)
+    await asyncio.sleep(0.01)
+
+    bus.close("A")
+    bus.close("B")
+
+    await asyncio.wait_for(asyncio.gather(ta, tb), timeout=1.0)
+    assert received_a == [evt_a]
+    assert received_b == []

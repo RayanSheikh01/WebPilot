@@ -1,100 +1,148 @@
+"""Tests for webpilot.store — SQLModel persistence layer."""
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
 import pytest
+from sqlmodel import Session, select
+
+from webpilot import store
+from webpilot.store import (
+    Brief,
+    Event,
+    Source,
+    add_source,
+    append_event,
+    create_brief,
+    get_brief,
+    init_db,
+    list_briefs,
+    list_events,
+    list_sources,
+    save_report,
+    session_scope,
+    update_brief,
+)
 
 
-from webpilot.store import Session, Brief, Event, Source
-
-def test_brief_creation():
-    session = Session()
-    brief = Brief(brief_text="Test brief")
-    session.add(brief)
-    session.commit()
-
-    assert brief.id is not None
-    assert brief.created_at is not None
-
-def test_event_append_and_list():
-    session = Session()
-    brief = Brief(brief_text="Test brief for events")
-    session.add(brief)
-    session.commit()
-
-    event1 = Event(brief_id=brief.id, event_type="test_event", event_data="data1")
-    event2 = Event(brief_id=brief.id, event_type="test_event", event_data="data2")
-    session.add_all([event1, event2])
-    session.commit()
-
-    events = session.query(Event).filter_by(brief_id=brief.id).order_by(Event.id).all()
-    assert len(events) == 2
-    assert events[0].event_data == "data1"
-    assert events[1].event_data == "data2"
+@pytest.fixture(autouse=True)
+def _db():
+    """Fresh in-memory DB for every test."""
+    engine = init_db(":memory:")
+    yield engine
+    store.engine = None
 
 
-def test_source_add_and_list():
-    session = Session()
-    brief = Brief(brief_text="Test brief for sources")
-    session.add(brief)
-    session.commit()
-
-    source1 = Source(brief_id=brief.id, source_text="Source 1")
-    source2 = Source(brief_id=brief.id, source_text="Source 2")
-    session.add_all([source1, source2])
-    session.commit()
-
-    sources = session.query(Source).filter_by(brief_id=brief.id).order_by(Source.id).all()
-    assert len(sources) == 2
-    assert sources[0].source_text == "Source 1"
-    assert sources[1].source_text == "Source 2"
-
-def test_brief_update():
-    session = Session()
-    brief = Brief(brief_text="Test brief for update")
-    session.add(brief)
-    session.commit()
-
-    brief.result = "Updated result"
-    session.commit()
-
-    updated_brief = session.query(Brief).filter_by(id=brief.id).first()
-    assert updated_brief.result == "Updated result"
+def test_init_db_creates_tables():
+    # All three tables should exist; querying them should not error.
+    with session_scope() as s:
+        assert s.exec(select(Brief)).all() == []
+        assert s.exec(select(Event)).all() == []
+        assert s.exec(select(Source)).all() == []
 
 
-def test_brief_report_path_update():
-    session = Session()
-    brief = Brief(brief_text="Test brief for report path")
-    session.add(brief)
-    session.commit()
-
-    brief.result = "Report path updated"
-    session.commit()
-
-    updated_brief = session.query(Brief).filter_by(id=brief.id).first()
-    assert updated_brief.result == "Report path updated"
-
-def append_event(brief_id, event_type, event_data):
-    session = Session()
-    event = Event(brief_id=brief_id, event_type=event_type, event_data=event_data)
-    session.add(event)
-    session.commit()
-    return event
-
-def add_source(brief_id, source_text):
-    session = Session()
-    source = Source(brief_id=brief_id, source_text=source_text)
-    session.add(source)
-    session.commit()
-    return source
+def test_create_brief_returns_brief_with_id_status_timestamps():
+    brief = create_brief("research foo")
+    assert isinstance(brief.id, str)
+    assert len(brief.id) == 32  # uuid4 hex
+    assert brief.prompt == "research foo"
+    assert brief.status == "queued"
+    assert isinstance(brief.created_at, datetime)
+    assert isinstance(brief.updated_at, datetime)
+    assert brief.report_path is None
 
 
-def list_sources(brief_id):
-    session = Session()
-    sources = session.query(Source).filter_by(brief_id=brief_id).order_by(Source.id).all()
-    return sources
+def test_update_brief_persists_and_returns_updated():
+    brief = create_brief("hello")
+    updated = update_brief(brief.id, status="running")
+    assert updated.status == "running"
 
-def save_report(brief_id, markdown):
-    session = Session()
-    brief = session.query(Brief).filter_by(id=brief_id).first()
-    if brief:
-        brief.result = markdown
-        session.commit()
-        return True
-    return False
+    again = get_brief(brief.id)
+    assert again is not None
+    assert again.status == "running"
+
+
+def test_get_brief_returns_none_for_missing():
+    assert get_brief("does-not-exist") is None
+
+
+def test_list_briefs_most_recent_first():
+    b1 = create_brief("first")
+    b2 = create_brief("second")
+    b3 = create_brief("third")
+    result = list_briefs(limit=10)
+    ids = [b.id for b in result]
+    assert ids == [b3.id, b2.id, b1.id]
+
+
+def test_list_briefs_respects_limit():
+    for i in range(5):
+        create_brief(f"b{i}")
+    result = list_briefs(limit=2)
+    assert len(result) == 2
+
+
+def test_append_event_writes_event_with_auto_id_and_ts():
+    brief = create_brief("p")
+    evt = append_event(brief.id, "status", {"value": "running"})
+    assert isinstance(evt.id, int)
+    assert evt.brief_id == brief.id
+    assert evt.kind == "status"
+    assert json.loads(evt.payload) == {"value": "running"}
+    assert isinstance(evt.ts, datetime)
+
+
+def test_list_events_id_order():
+    brief = create_brief("p")
+    e1 = append_event(brief.id, "a", {"i": 1})
+    e2 = append_event(brief.id, "b", {"i": 2})
+    e3 = append_event(brief.id, "c", {"i": 3})
+    result = list_events(brief.id)
+    assert [e.id for e in result] == [e1.id, e2.id, e3.id]
+
+
+def test_list_events_after_id_filters():
+    brief = create_brief("p")
+    e1 = append_event(brief.id, "a", {})
+    e2 = append_event(brief.id, "b", {})
+    e3 = append_event(brief.id, "c", {})
+    result = list_events(brief.id, after_id=e1.id)
+    assert [e.id for e in result] == [e2.id, e3.id]
+
+
+def test_list_events_isolates_by_brief():
+    b1 = create_brief("one")
+    b2 = create_brief("two")
+    append_event(b1.id, "x", {})
+    append_event(b2.id, "y", {})
+    assert len(list_events(b1.id)) == 1
+    assert len(list_events(b2.id)) == 1
+
+
+def test_add_source_and_list_sources():
+    brief = create_brief("p")
+    s1 = add_source(brief.id, "https://a.com", "A", "claim a")
+    s2 = add_source(brief.id, "https://b.com", "B", "claim b")
+    assert isinstance(s1.id, int)
+    sources = list_sources(brief.id)
+    assert [s.id for s in sources] == [s1.id, s2.id]
+    assert sources[0].url == "https://a.com"
+    assert sources[0].title == "A"
+    assert sources[0].claim == "claim a"
+
+
+def test_save_report_writes_file_and_updates_brief(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEBPILOT_REPORTS_DIR", str(tmp_path))
+    brief = create_brief("p")
+    path = save_report(brief.id, "# Hello\n\nbody")
+    assert isinstance(path, Path)
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == "# Hello\n\nbody"
+    assert path.parent == tmp_path
+    assert path.name == f"{brief.id}.md"
+
+    updated = get_brief(brief.id)
+    assert updated is not None
+    assert updated.report_path == str(path)

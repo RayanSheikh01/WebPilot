@@ -21,7 +21,15 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_tools.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_planner_loop.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_guardrails.py -v)",
-      "Bash(.venv/Scripts/python.exe -m pytest -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest -q)",
+      "PowerShell(python -m pytest tests/test_events.py -v 2>&1)",
+      "Bash(python -m pytest tests/test_store.py -v)",
+      "Bash(python -c \"from webpilot.config import get_settings; s=get_settings\\(\\); print\\(s.tavily_api_key\\)\")",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest tests/test_runner.py)",
+      "Bash(python -m pytest tests/test_runner.py --no-header)",
+      "Bash(python -m pytest tests/test_planner_loop.py tests/test_runner.py -v)",
+      "Bash(python -m pytest --collect-only -q)"
     ]
   }
 }
