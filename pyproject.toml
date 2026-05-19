@@ -18,6 +18,8 @@ dependencies = [
     "python-dotenv",
     "sse-starlette",
     "markdown-it-py",
+    "pydantic-settings",
+    "langchain-tavily",
 ]
 
 [project.optional-dependencies]

@@ -3,7 +3,15 @@
     "allow": [
       "Bash(pip install *)",
       "Bash(playwright install *)",
-      "Bash(pytest --collect-only)"
+      "Bash(pytest --collect-only)",
+      "Bash(.venv/Scripts/python.exe -m pytest --collect-only)",
+      "Bash(.venv/Scripts/python.exe -m pip install -e \".[dev]\")",
+      "Bash(.venv/Scripts/python.exe -m ensurepip --upgrade)",
+      "Bash(.venv/Scripts/python.exe -m pip install pydantic-settings langchain-tavily)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_search.py -v)",
+      "Bash(.venv/Scripts/python.exe -c \"from langchain_tavily import TavilySearch; import inspect; print\\(inspect.getsourcefile\\(TavilySearch\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import os; os.environ['TAVILY_API_KEY']='x'; from langchain_tavily import TavilySearch; t=TavilySearch\\(\\); r=t.invoke\\('hi'\\); print\\(type\\(r\\), list\\(r.keys\\(\\)\\) if isinstance\\(r,dict\\) else r\\)\")",
+      "Bash(.venv/Scripts/python.exe -m grep -r \"post\\\\|http\" .venv/Lib/site-packages/langchain_tavily/_utilities.py)"
     ]
   }
 }

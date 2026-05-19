@@ -18,7 +18,3 @@ class Settings(BaseSettings):
 
 def get_settings():
     return Settings()
-
-
-# example usage:
-settings = get_settings()
