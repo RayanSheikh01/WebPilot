@@ -11,7 +11,13 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_search.py -v)",
       "Bash(.venv/Scripts/python.exe -c \"from langchain_tavily import TavilySearch; import inspect; print\\(inspect.getsourcefile\\(TavilySearch\\)\\)\")",
       "Bash(.venv/Scripts/python.exe -c \"import os; os.environ['TAVILY_API_KEY']='x'; from langchain_tavily import TavilySearch; t=TavilySearch\\(\\); r=t.invoke\\('hi'\\); print\\(type\\(r\\), list\\(r.keys\\(\\)\\) if isinstance\\(r,dict\\) else r\\)\")",
-      "Bash(.venv/Scripts/python.exe -m grep -r \"post\\\\|http\" .venv/Lib/site-packages/langchain_tavily/_utilities.py)"
+      "Bash(.venv/Scripts/python.exe -m grep -r \"post\\\\|http\" .venv/Lib/site-packages/langchain_tavily/_utilities.py)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py -v --no-header)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py::test_per_domain_throttle -v -s)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_browser.py --collect-only)",
+      "Bash(.venv/Scripts/python.exe -m pip install \"pytest<9\")"
     ]
   }
 }
