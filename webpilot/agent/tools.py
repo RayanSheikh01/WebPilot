@@ -1,7 +1,3 @@
-'''TOOL_SCHEMAS is a list of 9 dicts (web_search, browser_goto, browser_get_text, browser_get_links, browser_screenshot, browser_back, note, cite, finish).
-Each has name, description, input_schema (a JSON schema with type: "object").
-Each required param appears in input_schema.required.'''
-
 from typing import List, Dict
 
 TOOL_SCHEMAS: List[Dict] = [
@@ -119,3 +115,81 @@ TOOL_SCHEMAS: List[Dict] = [
         },
     },
 ]
+
+
+class ToolExecutor:
+    def __init__(self, browser, search, tracker, emit, screenshot_dir, notes_sink):
+        self.browser = browser
+        self.search = search
+        self.tracker = tracker
+        self.emit = emit
+        self.screenshot_dir = screenshot_dir
+        self.notes_sink = notes_sink
+        self.tool_map = {
+            "web_search": self._run_web_search,
+            "browser_goto": self._run_browser_goto,
+            "browser_get_text": self._run_browser_get_text,
+            "browser_get_links": self._run_browser_get_links,
+            "browser_screenshot": self._run_browser_screenshot,
+            "browser_back": self._run_browser_back,
+            "note": self._run_note,
+            "cite": self._run_cite,
+            "finish": self._run_finish,
+        }
+
+    async def run(self, name: str, input: Dict) -> Dict:
+        if name not in self.tool_map:
+            raise ValueError(f"Unknown tool: {name}")
+        await self.tracker.check_before_call(name, input)
+        result = await self.tool_map[name](input)
+        tokens_used = 0  # In a real implementation, calculate tokens used based on input and output size.
+        await self.tracker.record_call(name, input, result, tokens_used)
+        return result
+
+    # Placeholder implementations for each tool. In a real implementation, these would interact with the browser and search components.
+
+    async def _run_web_search(self, input):
+        query = input["query"]
+        k = input.get("k", 3)
+        return {"results": [f"Result {i+1} for {query}" for i in range(k)]}
+
+    async def _run_browser_goto(self, input):
+        url = input["url"]
+        # Simulate browser navigation
+        return {"status": f"Navigated to {url}"}
+
+    async def _run_browser_get_text(self, input):
+        max_chars = input.get("max_chars", 1000)
+        # Simulate getting text from the page
+        return {"text": "Some page text"[:max_chars]}
+
+    async def _run_browser_get_links(self, input):
+        # Simulate extracting links from the page
+        return {"links": [{"text": "Example", "href": "http://example.com"}]}
+
+    async def _run_browser_screenshot(self, input):
+        # Simulate taking a screenshot
+        return {"screenshot": "base64-encoded-image"}
+    
+    async def _run_browser_back(self, input):
+        # Simulate going back in browser history
+        return {"status": "Went back in history"}
+    
+    async def _run_note(self, input):
+        content = input["content"]
+        # Simulate saving a note
+        self.notes_sink.save(content)
+        return {"status": "Note saved"}
+    
+    async def _run_cite(self, input):
+        text = input["text"]
+        url = input["url"]
+        # Simulate saving a citation
+        self.notes_sink.save(f"Citation: {text} ({url})")
+        return {"status": "Citation saved"}
+    
+    async def _run_finish(self, input):
+        answer = input["answer"]
+        # Simulate finishing the task
+        return {"status": "Task finished", "answer": answer}
+    

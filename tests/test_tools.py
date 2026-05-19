@@ -39,3 +39,32 @@ def test_no_mutating_browser_tools_exposed():
     forbidden = {"browser_click", "browser_fill", "browser_submit", "browser_eval"}
     names = {t["name"] for t in TOOL_SCHEMAS}
     assert names & forbidden == set()
+
+
+def test_tool_executor():
+    from webpilot.agent.tools import ToolExecutor
+    from webpilot.agent.guardrails import BudgetTracker
+
+    # Create dummy dependencies
+    class DummyBrowser:
+        async def goto(self, url): pass
+        async def get_text(self): return "dummy text"
+        async def get_links(self): return ["http://example.com"]
+        async def screenshot(self, path): pass
+        async def back(self): pass
+
+    class DummySearch:
+        async def search(self, query): return [{"title": "result", "url": "http://example.com"}]
+
+    class DummyEmit:
+        async def __call__(self, event): pass
+
+    class DummyNotesSink:
+        async def save(self, note): pass
+    tracker = BudgetTracker({
+        "wall_clock": 10,
+        "tool_calls": 10,
+        "pages": 10,
+        "tokens": 100,
+    })
+    executor = ToolExecutor(DummyBrowser(), DummySearch(), tracker, DummyEmit(), "/tmp/screenshots", DummyNotesSink())
