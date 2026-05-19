@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webpilot"
+version = "0.1.0"
+description = "Autonomous browser research agent (Claude + Playwright)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlmodel",
+    "playwright",
+    "anthropic",
+    "httpx",
+    "jinja2",
+    "python-dotenv",
+    "sse-starlette",
+    "markdown-it-py",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-httpx",
+    "respx",
+]
+
+[tool.setuptools.packages.find]
+include = ["webpilot*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
